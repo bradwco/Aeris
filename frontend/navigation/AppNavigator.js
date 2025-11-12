@@ -11,17 +11,16 @@ const Stack = createNativeStackNavigator();
 export default function AppNavigator() {
   return (
     <NavigationContainer>
-      <Stack.Navigator initialRouteName="Home">
+      <Stack.Navigator
+        initialRouteName="Home"
+        screenOptions={{ headerShown: false, animation: 'none' }}
+      >
         <Stack.Screen
           name="Home"
           component={Home}
-          options={{ headerShown: false, gestureEnabled: false }}
+          options={{ gestureEnabled: false }}
         />
-        <Stack.Screen
-          name="Settings"
-          component={Settings}
-          options={{ headerShown: false }}
-        />
+        <Stack.Screen name="Settings" component={Settings} />
       </Stack.Navigator>
     </NavigationContainer>
   );
