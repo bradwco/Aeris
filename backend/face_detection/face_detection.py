@@ -5,18 +5,31 @@ import time
 import cv2
 import socket
 import json
+import queue
+from retrieval.retrieval import WebcamProducer
 
 latest_jpeg = None
 SERVER_ADDRS = []
 SERVER_PORT = 8080
 
-def capture_thread(device=0):
+def give_bounding_boxes(gray, cascade):
+	faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+	return faces
+
+def capture_thread(device=0, frame_queue=None, bounding_box_queue=None):
 	global latest_jpeg
-	cap = cv2.VideoCapture(device)
 	cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+	
+	# Create frame queue and producer if not provided
+	if frame_queue is None:
+		frame_queue = queue.Queue(maxsize=2)
+		producer = WebcamProducer(frame_queue, device=device)
+		producer.start()
+	
 	while True:
-		ret, frame = cap.read()
-		if not ret:
+		try:
+			frame = frame_queue.get(timeout=0.1)
+		except queue.Empty:
 			time.sleep(0.01)
 			continue
 		h, w = frame.shape[:2]
@@ -28,14 +41,32 @@ def capture_thread(device=0):
 		else:
 			small = frame
 		gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-		faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+		faces = give_bounding_boxes(gray, cascade)
+		
+		# Scale bounding boxes back to original frame size and send to queue
+		scaled_faces = []
 		for (x, y, fw, fh) in faces:
 			if scale != 1.0:
 				x = int(x / scale)
 				y = int(y / scale)
 				fw = int(fw / scale)
 				fh = int(fh / scale)
+			scaled_faces.append((x, y, fw, fh))
 			cv2.rectangle(frame, (x, y), (x + fw, y + fh), (0, 255, 0), 2)
+		
+		# Send bounding boxes to queue if provided (send first/largest face)
+		if bounding_box_queue is not None and len(scaled_faces) > 0:
+			# Get the largest face (by area)
+			largest_face = max(scaled_faces, key=lambda f: f[2] * f[3])
+			try:
+				bounding_box_queue.put(largest_face, block=False)
+			except queue.Full:
+				try:
+					_ = bounding_box_queue.get_nowait()
+					bounding_box_queue.put(largest_face, block=False)
+				except queue.Empty:
+					pass
+		
 		ret2, jpg = cv2.imencode('.jpg', frame)
 		if not ret2:
 			continue
@@ -76,11 +107,7 @@ class Handler(server.BaseHTTPRequestHandler):
 				self.wfile.write(latest_jpeg)
 			except Exception:
 				return
-		else:
-			self.send_response(404)
-			self.end_headers()
-
-		if self.path == '/info':
+		elif self.path == '/info':
 			self.send_response(200)
 			self.send_header('Content-Type', 'application/json')
 			self.end_headers()
@@ -89,11 +116,14 @@ class Handler(server.BaseHTTPRequestHandler):
 				self.wfile.write(json.dumps(payload).encode())
 			except Exception:
 				return
+		else:
+			self.send_response(404)
+			self.end_headers()
 
 
 
-def run(host='0.0.0.0', port=8080, device=0):
-	t = threading.Thread(target=lambda: capture_thread(device), daemon=True)
+def run(host='0.0.0.0', port=8080, device=0, frame_queue=None, bounding_box_queue=None):
+	t = threading.Thread(target=lambda: capture_thread(device, frame_queue, bounding_box_queue), daemon=True)
 	t.start()
 	addrs = set()
 	addrs.add('127.0.0.1')
@@ -123,6 +153,7 @@ def run(host='0.0.0.0', port=8080, device=0):
 			httpd.serve_forever()
 		except KeyboardInterrupt:
 			pass
+
 
 if __name__ == '__main__':
 	run()
