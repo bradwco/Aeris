@@ -1,33 +1,62 @@
-import os
-import importlib.util
+import argparse
+import queue
+import threading
+from retrieval.retrieval import WebcamProducer
+from face_detection.face_detection import run as face_detection_run
+from computation.computation import Computation
 
-this_dir = os.path.dirname(__file__)
-fd_path = os.path.join(this_dir, "face_detection", "face_detection.py")
-spec = importlib.util.spec_from_file_location("face_detection", fd_path)
-fd = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(fd)
 
-if hasattr(fd, "run"):
-	fd.run()
-else:
-	import os
-	import importlib.util
-	import argparse
+def computation_thread(bounding_box_queue, computation):
+	"""Process bounding boxes through computation module"""
+	old_box = None
+	
+	while True:
+		try:
+			new_box = bounding_box_queue.get(timeout=0.1)
+			if new_box is not None:
+				delta = computation.compute(old_box, new_box)
+				if delta is not None:
+					print(f"Delta coordinates: {delta}")
+				old_box = new_box
+		except queue.Empty:
+			continue
 
-	this_dir = os.path.dirname(__file__)
-	fd_path = os.path.join(this_dir, "face_detection", "face_detection.py")
-	spec = importlib.util.spec_from_file_location("face_detection", fd_path)
-	fd = importlib.util.module_from_spec(spec)
-	spec.loader.exec_module(fd)
 
+def main():
 	parser = argparse.ArgumentParser()
 	parser.add_argument("--host", default="0.0.0.0")
 	parser.add_argument("--port", default=8080, type=int)
 	parser.add_argument("--device", default=0, type=int)
 	args = parser.parse_args()
+	
+	# Create queues
+	frame_queue = queue.Queue(maxsize=2)
+	bounding_box_queue = queue.Queue(maxsize=2)
+	
+	# Create WebcamProducer from retrieval module
+	producer = WebcamProducer(frame_queue, device=args.device)
+	producer.start()
+	
+	# Create Computation instance
+	computation = Computation()
+	
+	# Start computation thread to process bounding boxes
+	comp_thread = threading.Thread(
+		target=lambda: computation_thread(bounding_box_queue, computation),
+		daemon=True
+	)
+	comp_thread.start()
+	
+	# Start face detection with frame queue and bounding box queue
+	# This will also start the HTTP server
+	face_detection_run(
+		host=args.host,
+		port=args.port,
+		device=args.device,
+		frame_queue=frame_queue,
+		bounding_box_queue=bounding_box_queue
+	)
 
-	if hasattr(fd, "run"):
-		fd.run(host=args.host, port=args.port, device=args.device)
-	else:
-		import runpy
-		runpy.run_path(fd_path, run_name="__main__")
+
+if __name__ == '__main__':
+	main()
