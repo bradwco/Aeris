@@ -3,9 +3,8 @@ import time
 import cv2
 import subprocess
 import threading
-import numpy as np
+import queue
 from dotenv import load_dotenv
-from face_detection.face_detection import latest_jpeg
 
 dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
 load_dotenv(dotenv_path)
@@ -19,58 +18,118 @@ FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 
 FULL_RTMPS_URL = f"{INGEST_ENDPOINT}{STREAM_KEY}"
 
-def build_ffmpeg_command():
-    return [
-        FFMPEG_BIN,
-        "-y",
-        "-f", "rawvideo",
-        "-vcodec", "rawvideo",
-        "-pix_fmt", "bgr24",
-        "-s", f"{WIDTH}x{HEIGHT}",
-        "-r", "30",
-        "-i", "-",
-        "-timeout", "20000000",
-        "-vcodec", "libx264",
-        "-preset", "veryfast",
-        "-tune", "zerolatency",
-        "-b:v", VIDEO_BITRATE,
-        "-maxrate", VIDEO_BITRATE,
-        "-bufsize", "5000k",
-        "-pix_fmt", "yuv420p",
-        "-g", "60",
-        "-an",
-        "-f", "flv",
-        FULL_RTMPS_URL,
-        "-rtmp_transport", "tcp",
-        "-rtmp_sni", "a8f10c5a7c92.global-contribute.live-video.net",
-        "-flags", "low_delay"
-    ]
+class IVSUploader:
+    def __init__(self, frame_queue, width=WIDTH, height=HEIGHT, bitrate=VIDEO_BITRATE):
+        self.frame_queue = frame_queue
+        self.width = width
+        self.height = height
+        self.bitrate = bitrate
+        self.ffmpeg_proc = None
+        self.running = False
 
-def frame_sender(ffmpeg_proc):
-    global latest_jpeg
-    while True:
-        if latest_jpeg is None:
-            time.sleep(0.01)
-            continue
-        frame = cv2.imdecode(
-            np.frombuffer(latest_jpeg, dtype=np.uint8),
-            cv2.IMREAD_COLOR,
+    def build_ffmpeg_command(self):
+        """Amazon IVS verified FFmpeg command"""
+        return [
+            FFMPEG_BIN,
+            "-f", "rawvideo",
+            "-pix_fmt", "yuv420p",   # match converted CV input!
+            "-s", f"{self.width}x{self.height}",
+            "-r", "30",
+            "-i", "-",
+
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-tune", "zerolatency",
+            "-b:v", self.bitrate,
+            "-maxrate", self.bitrate,
+            "-bufsize", "5000k",
+            "-g", "60",
+            "-an",
+
+            "-f", "flv",
+            FULL_RTMPS_URL,
+        ]
+
+    def log_ffmpeg_errors(self):
+        while self.running and self.ffmpeg_proc and self.ffmpeg_proc.stderr:
+            line = self.ffmpeg_proc.stderr.readline().decode(errors="ignore").strip()
+            if line:
+                print("FFmpeg:", line)
+
+    def restart_ffmpeg(self):
+        print("🚨 Restarting FFmpeg...")
+        if self.ffmpeg_proc:
+            try:
+                self.ffmpeg_proc.terminate()
+                self.ffmpeg_proc.wait(timeout=2)
+            except:
+                self.ffmpeg_proc.kill()
+
+        cmd = self.build_ffmpeg_command()
+        self.ffmpeg_proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stderr=subprocess.PIPE
         )
-        if frame is None:
-            continue
-        print("frame to IVS")
-        frame = cv2.resize(frame, (WIDTH, HEIGHT))
-        ffmpeg_proc.stdin.write(frame.tobytes())
+        threading.Thread(target=self.log_ffmpeg_errors, daemon=True).start()
 
-def stream_forever():
-    cmd = build_ffmpeg_command()
-    ffmpeg_proc = subprocess.Popen(
-        cmd,
-        stdin=subprocess.PIPE
-    )
-    sender = threading.Thread(target=frame_sender, args=(ffmpeg_proc,), daemon=True)
-    sender.start()
-    ffmpeg_proc.wait()
+    def frame_sender(self):
+        while self.running:
+            try:
+                frame = self.frame_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            if frame is None:
+                continue
+
+            # Ensure correct size
+            if frame.shape[1] != self.width or frame.shape[0] != self.height:
+                frame = cv2.resize(frame, (self.width, self.height))
+
+            # Convert BGR -> YUV420 (strict format Amazon IVS expects)
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2YUV_I420)
+
+            # Check FFmpeg process still alive
+            if self.ffmpeg_proc.poll() is not None:
+                print("⚠ FFmpeg exited unexpectedly")
+                self.restart_ffmpeg()
+                continue
+
+            try:
+                self.ffmpeg_proc.stdin.write(frame.tobytes())
+            except (BrokenPipeError, OSError):
+                print("❌ FFmpeg pipe broken during write")
+                self.restart_ffmpeg()
+
+    def start(self):
+        if self.running:
+            return
+
+        print("Starting IVS uploader...")
+        self.running = True
+        self.restart_ffmpeg()
+        threading.Thread(target=self.frame_sender, daemon=True).start()
+        print(f"✓ Streaming → {FULL_RTMPS_URL}")
+
+    def stop(self):
+        print("Stopping IVS uploader...")
+        self.running = False
+        if self.ffmpeg_proc:
+            try:
+                self.ffmpeg_proc.terminate()
+                self.ffmpeg_proc.wait(timeout=2)
+            except:
+                self.ffmpeg_proc.kill()
 
 if __name__ == "__main__":
-    stream_forever()
+    # Quick test mode
+    test_queue = queue.Queue(maxsize=1)
+    uploader = IVSUploader(test_queue)
+    uploader.start()
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        uploader.stop()

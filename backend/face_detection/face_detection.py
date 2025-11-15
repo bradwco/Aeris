@@ -1,22 +1,23 @@
-from http import server
-import socketserver
 import threading
 import time
 import cv2
-import socket
-import json
 import queue
 from retrieval.retrieval import WebcamProducer
 
-latest_jpeg = None
-SERVER_ADDRS = []
-SERVER_PORT = 8080
-
 def give_bounding_boxes(gray, cascade):
-    return cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30,30))
+    faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    return faces
 
-def capture_thread(device=0, frame_queue=None, bounding_box_queue=None):
-    global latest_jpeg
+def detect_faces(device=0, frame_queue=None, bounding_box_queue=None, output_frame_queue=None):
+    """
+    Detect faces in frames and pass processed frames to output queue for IVS streaming.
+    
+    Args:
+        device: Webcam device index
+        frame_queue: Input queue of frames from retrieval
+        bounding_box_queue: Output queue of bounding boxes for computation
+        output_frame_queue: Output queue of processed frames for IVS upload
+    """
     cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
     if frame_queue is None:
@@ -31,25 +32,32 @@ def capture_thread(device=0, frame_queue=None, bounding_box_queue=None):
             time.sleep(0.01)
             continue
 
-        h, w = frame.shape[:2]
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = give_bounding_boxes(gray, cascade)
 
-        if len(faces) > 0:
-            # largest face
-            (x, y, fw, fh) = max(faces, key=lambda f: f[2]*f[3])
-            cv2.rectangle(frame, (x,y), (x+fw, y+fh), (0,255,0), 2)
+        for (x, y, fw, fh) in faces:
+            cv2.rectangle(frame, (x, y), (x + fw, y + fh), (0, 255, 0), 2)
 
-            face_data = ((x,y,fw,fh), w, h)
+        if bounding_box_queue and len(faces) > 0:
             try:
-                bounding_box_queue.put(face_data, block=False)
+                faces_sorted = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)
+                bounding_box_queue.put(faces_sorted[0], block=False)
             except queue.Full:
                 try:
-                    _ = bounding_box_queue.get_nowait()
-                    bounding_box_queue.put(face_data, block=False)
+                    bounding_box_queue.get_nowait()
+                    bounding_box_queue.put(faces_sorted[0], block=False)
                 except queue.Empty:
                     pass
 
-        ret, jpg = cv2.imencode(".jpg", frame)
-        if ret:
-            latest_jpeg = jpg.tobytes()
+        if output_frame_queue:
+            try:
+                output_frame_queue.put(frame, block=False)
+            except queue.Full:
+                try:
+                    output_frame_queue.get_nowait()
+                    output_frame_queue.put(frame, block=False)
+                except queue.Empty:
+                    pass
+
+if __name__ == "__main__":
+    detect_faces()
