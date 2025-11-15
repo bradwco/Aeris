@@ -3,6 +3,11 @@
 # Pin a numpy minimum so pip will grab a compatible prebuilt wheel for your Python.
 numpy>=1.24.0
 opencv-python>=4.7.0
+gpiozero>=1.6.2
+
+# Optional but recommended for better servo control on Raspberry Pi:
+# pigpio>=1.78 (install separately: sudo apt-get install pigpio python3-pigpio)
+# Or: pip install pigpio (if available for your platform)
 
 # Notes / fallback:
 # - If pip fails stating a wheel is not available for your Python version, either:

@@ -58,12 +58,14 @@ def capture_thread(device=0, frame_queue=None, bounding_box_queue=None):
 		if bounding_box_queue is not None and len(scaled_faces) > 0:
 			# Get the largest face (by area)
 			largest_face = max(scaled_faces, key=lambda f: f[2] * f[3])
+			# Pass bounding box along with frame dimensions
+			face_data = (largest_face, w, h)
 			try:
-				bounding_box_queue.put(largest_face, block=False)
+				bounding_box_queue.put(face_data, block=False)
 			except queue.Full:
 				try:
 					_ = bounding_box_queue.get_nowait()
-					bounding_box_queue.put(largest_face, block=False)
+					bounding_box_queue.put(face_data, block=False)
 				except queue.Empty:
 					pass
 		
