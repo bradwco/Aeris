@@ -45,4 +45,3 @@ class WebcamProducer(threading.Thread):
 						pass
 		finally:
 			cap.release()
-
