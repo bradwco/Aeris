@@ -54,7 +54,6 @@ def capture_thread(device=0, frame_queue=None, bounding_box_queue=None):
         if ret:
             latest_jpeg = jpg.tobytes()
 
-
 class Handler(server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/stream":
@@ -106,7 +105,6 @@ class Handler(server.BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-
 def run(host="0.0.0.0", port=8080, device=0, frame_queue=None, bounding_box_queue=None):
     threading.Thread(target=lambda: capture_thread(device, frame_queue, bounding_box_queue),
                      daemon=True).start()
@@ -134,7 +132,6 @@ def run(host="0.0.0.0", port=8080, device=0, frame_queue=None, bounding_box_queu
             httpd.serve_forever()
         except KeyboardInterrupt:
             pass
-
 
 if __name__ == "__main__":
     run()
