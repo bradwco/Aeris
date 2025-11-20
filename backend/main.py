@@ -4,6 +4,7 @@ import threading
 from retrieval.retrieval import WebcamProducer
 from face_detection.face_detection import detect_faces
 from ivs_upload.ivs_upload import IVSUploader
+from websocket.websocket import WebSocket
 from dotenv import load_dotenv
 import os
 
@@ -34,6 +35,8 @@ def main():
     frame_queue = queue.Queue(maxsize=2)
     bounding_box_queue = queue.Queue(maxsize=2)
     ivs_frame_queue = queue.Queue(maxsize=2)
+
+    socket = WebSocket("0.0.0.0", 8080)
 
     print("Starting Aeris Pipeline (Pure IVS Mode)")
     print("Retrieval → Face Detection → IVS Upload")

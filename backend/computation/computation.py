@@ -14,8 +14,8 @@ DEG_PER_INCH = 10
 def compute_rotation(bounding_box):
 	box_x, box_y, box_w, box_h = bounding_box
 
-	box_cx = x + (box_w / 2)
-	box_cy = y + (box_h / 2)
+	box_cx = box_x + (box_w / 2)
+	box_cy = box_y + (box_h / 2)
 
 	frame_cx = FRAME_WIDTH / 2
 	frame_cy = FRAME_HEIGHT / 2
